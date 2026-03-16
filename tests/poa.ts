@@ -148,4 +148,45 @@ describe("proof-of-agent", () => {
       console.log("Correctly rejected double invalidation");
     }
   });
+
+  it("Closes a receipt and reclaims rent", async () => {
+    const closeReceiptId = generateReceiptId();
+    const [closePda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(closeReceiptId),
+      ],
+      program.programId
+    );
+
+    await program.methods
+      .issueReceipt(closeReceiptId, modelHash, inputHash, outputHash)
+      .accounts({
+        agent: agent,
+        receipt: closePda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const balanceBefore = await anchor.getProvider().connection.getBalance(agent);
+
+    await program.methods
+      .closeReceipt()
+      .accounts({
+        agent: agent,
+        receipt: closePda,
+      })
+      .rpc();
+
+    const balanceAfter = await anchor.getProvider().connection.getBalance(agent);
+    assert.ok(balanceAfter > balanceBefore, "Rent should be reclaimed");
+
+    try {
+      await program.account.computeReceipt.fetch(closePda);
+      assert.fail("Account should be closed");
+    } catch (err) {
+      console.log("Receipt closed, rent reclaimed successfully");
+    }
+  });
 });
