@@ -77,6 +77,11 @@ pub mod poa {
         msg!("PoA: Receipt invalidated by {}", receipt.agent);
         Ok(())
     }
+
+    pub fn close_receipt(_ctx: Context<CloseReceipt>) -> Result<()> {
+        msg!("PoA: Receipt closed and rent reclaimed");
+        Ok(())
+    }
 }
 
 #[account]
@@ -128,6 +133,19 @@ pub struct InvalidateReceipt<'info> {
         mut,
         constraint = receipt.agent == agent.key() @ PoaError::UnauthorizedInvalidation,
         constraint = receipt.is_valid @ PoaError::AlreadyInvalidated,
+    )]
+    pub receipt: Account<'info, ComputeReceipt>,
+}
+
+#[derive(Accounts)]
+pub struct CloseReceipt<'info> {
+    #[account(mut)]
+    pub agent: Signer<'info>,
+
+    #[account(
+        mut,
+        close = agent,
+        constraint = receipt.agent == agent.key() @ PoaError::UnauthorizedInvalidation,
     )]
     pub receipt: Account<'info, ComputeReceipt>,
 }
