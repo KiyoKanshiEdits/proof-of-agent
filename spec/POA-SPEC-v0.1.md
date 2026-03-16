@@ -6,7 +6,7 @@
 |-------|-------|
 | **Spec Version** | 0.1 (Draft) |
 | **Status** | Draft — open for community feedback |
-| **Author** | Logan Green |
+| **Author** | Logan |
 | **Chain** | Solana (reference implementation) |
 | **License** | MIT |
 | **Repository** | https://github.com/KiyoKanshiEdits/proof-of-agent |
