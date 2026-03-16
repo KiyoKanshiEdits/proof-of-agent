@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Poa } from "../target/types/poa";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { assert } from "chai";
 
 function sha256(data: string): number[] {
@@ -10,11 +10,16 @@ function sha256(data: string): number[] {
   return Array.from(hash);
 }
 
+function generateReceiptId(): number[] {
+  return Array.from(randomBytes(16));
+}
+
 describe("proof-of-agent", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.poa as Program<Poa>;
   const agent = anchor.getProvider().publicKey;
 
+  const receiptId = generateReceiptId();
   const modelHash = sha256("yield-optimizer-v2.1");
   const inputHash = sha256(JSON.stringify({ portfolio: ["SOL", "USDC"], amount: 1000 }));
   const outputHash = sha256(JSON.stringify({ recommendation: "rebalance", confidence: 87 }));
@@ -26,13 +31,13 @@ describe("proof-of-agent", () => {
       [
         Buffer.from("receipt"),
         anchor.getProvider().publicKey.toBuffer(),
-        Buffer.from(inputHash),
+        Buffer.from(receiptId),
       ],
       program.programId
     );
 
     const tx = await program.methods
-      .issueReceipt(modelHash, inputHash, outputHash)
+      .issueReceipt(receiptId, modelHash, inputHash, outputHash)
       .accounts({
         agent: agent,
         receipt: receiptPda,
@@ -49,9 +54,39 @@ describe("proof-of-agent", () => {
 
     assert.ok(receipt.agent.equals(agent));
     assert.ok(receipt.isValid);
+    assert.deepEqual(receipt.receiptId, receiptId);
     assert.deepEqual(receipt.modelHash, modelHash);
     assert.deepEqual(receipt.inputHash, inputHash);
     assert.deepEqual(receipt.outputHash, outputHash);
+  });
+
+  it("Issues a second receipt with same inputs (different receipt_id)", async () => {
+    const secondReceiptId = generateReceiptId();
+
+    const [secondPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(secondReceiptId),
+      ],
+      program.programId
+    );
+
+    const tx = await program.methods
+      .issueReceipt(secondReceiptId, modelHash, inputHash, outputHash)
+      .accounts({
+        agent: agent,
+        receipt: secondPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    console.log("Second receipt tx:", tx);
+
+    const receipt = await program.account.computeReceipt.fetch(secondPda);
+    assert.ok(receipt.isValid);
+    assert.deepEqual(receipt.inputHash, inputHash);
+    console.log("Same inputs, different receipt_id — no collision");
   });
 
   it("Verifies a receipt", async () => {
@@ -97,5 +132,20 @@ describe("proof-of-agent", () => {
     const receipt = await program.account.computeReceipt.fetch(receiptPda);
     assert.ok(!receipt.isValid);
     console.log("Receipt invalidated successfully");
+  });
+
+  it("Fails to invalidate an already invalidated receipt", async () => {
+    try {
+      await program.methods
+        .invalidateReceipt()
+        .accounts({
+          agent: agent,
+          receipt: receiptPda,
+        })
+        .rpc();
+      assert.fail("Should have thrown");
+    } catch (err) {
+      console.log("Correctly rejected double invalidation");
+    }
   });
 });
