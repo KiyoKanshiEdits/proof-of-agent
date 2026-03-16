@@ -149,7 +149,7 @@ export class PoA {
    * Fetch a receipt from on-chain by its PDA address.
    */
   async fetchReceipt(receiptAddress: PublicKey): Promise<Receipt> {
-    const account = await this.program.account.computeReceipt.fetch(receiptAddress);
+    const account = await (this.program.account as any).computeReceipt.fetch(receiptAddress);
 
     return {
       address: receiptAddress,
@@ -212,7 +212,7 @@ export class PoA {
    * Fetch all receipts issued by this agent.
    */
   async fetchAllReceipts(): Promise<Receipt[]> {
-    const accounts = await this.program.account.computeReceipt.all([
+    const accounts = await (this.program.account as any).computeReceipt.all([
       {
         memcmp: {
           offset: 8, // after discriminator
@@ -221,7 +221,7 @@ export class PoA {
       },
     ]);
 
-    return accounts.map((a) => ({
+    return accounts.map((a: any) => ({
       address: a.publicKey,
       agent: a.account.agent as PublicKey,
       receiptId: a.account.receiptId as number[],
@@ -238,7 +238,7 @@ export class PoA {
    * Fetch all receipts for any agent by their public key.
    */
   async fetchReceiptsByAgent(agentPubkey: PublicKey): Promise<Receipt[]> {
-    const accounts = await this.program.account.computeReceipt.all([
+    const accounts = await (this.program.account as any).computeReceipt.all([
       {
         memcmp: {
           offset: 8,
@@ -247,7 +247,7 @@ export class PoA {
       },
     ]);
 
-    return accounts.map((a) => ({
+    return accounts.map((a: any) => ({
       address: a.publicKey,
       agent: a.account.agent as PublicKey,
       receiptId: a.account.receiptId as number[],
