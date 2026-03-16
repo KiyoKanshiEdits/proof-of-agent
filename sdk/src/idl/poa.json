@@ -1,29 +1,327 @@
 {
-  "name": "@proof-of-agent/sdk",
-  "version": "0.1.0",
-  "description": "TypeScript SDK for Proof of Agent — verifiable compute receipts on Solana",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "scripts": {
-    "build": "tsc",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "npm run build"
+  "address": "A8wBefib1QpxPpkV7hrz4tRp49L6gxzDhWBQFcLmBVnv",
+  "metadata": {
+    "name": "poa",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
   },
-  "keywords": ["solana", "ai-agent", "proof-of-agent", "verifiable-compute", "anchor"],
-  "author": "Logan Green",
-  "license": "MIT",
-  "files": ["dist", "src"],
-  "peerDependencies": {
-    "@coral-xyz/anchor": ">=0.30.0",
-    "@solana/web3.js": ">=1.90.0"
-  },
-  "dependencies": {
-    "@coral-xyz/anchor": "^0.30.1",
-    "@solana/web3.js": "^1.95.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0",
-    "ts-node": "^10.9.0"
-  }
+  "instructions": [
+    {
+      "name": "invalidate_receipt",
+      "discriminator": [
+        129,
+        33,
+        103,
+        163,
+        106,
+        155,
+        36,
+        243
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "receipt",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "issue_receipt",
+      "discriminator": [
+        128,
+        231,
+        32,
+        119,
+        210,
+        139,
+        80,
+        68
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "receipt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent"
+              },
+              {
+                "kind": "arg",
+                "path": "receipt_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "receipt_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "model_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "input_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "output_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_receipt",
+      "discriminator": [
+        202,
+        144,
+        21,
+        149,
+        181,
+        189,
+        23,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "receipt"
+        }
+      ],
+      "args": [],
+      "returns": "bool"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ComputeReceipt",
+      "discriminator": [
+        103,
+        89,
+        70,
+        197,
+        208,
+        161,
+        43,
+        6
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "ReceiptInvalidated",
+      "discriminator": [
+        240,
+        167,
+        61,
+        205,
+        50,
+        238,
+        103,
+        77
+      ]
+    },
+    {
+      "name": "ReceiptIssued",
+      "discriminator": [
+        233,
+        140,
+        157,
+        214,
+        59,
+        46,
+        229,
+        231
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "UnauthorizedInvalidation",
+      "msg": "Only the original agent can invalidate a receipt"
+    },
+    {
+      "code": 6001,
+      "name": "AlreadyInvalidated",
+      "msg": "Receipt has already been invalidated"
+    }
+  ],
+  "types": [
+    {
+      "name": "ComputeReceipt",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "receipt_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "model_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "input_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "output_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "is_valid",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReceiptInvalidated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReceiptIssued",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "model_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
 }
