@@ -14,6 +14,8 @@ function generateReceiptId(): number[] {
   return Array.from(randomBytes(16));
 }
 
+const EMPTY_HASH = Array(32).fill(0);
+
 describe("proof-of-agent", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.poa as Program<Poa>;
@@ -26,7 +28,7 @@ describe("proof-of-agent", () => {
 
   let receiptPda: PublicKey;
 
-  it("Issues a compute receipt", async () => {
+  it("Issues a compute receipt (no parent)", async () => {
     [receiptPda] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("receipt"),
@@ -37,10 +39,11 @@ describe("proof-of-agent", () => {
     );
 
     const tx = await program.methods
-      .issueReceipt(receiptId, modelHash, inputHash, outputHash)
+      .issueReceipt(receiptId, modelHash, inputHash, outputHash, EMPTY_HASH)
       .accounts({
         agent: agent,
         receipt: receiptPda,
+        parentReceipt: null,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -58,6 +61,7 @@ describe("proof-of-agent", () => {
     assert.deepEqual(receipt.modelHash, modelHash);
     assert.deepEqual(receipt.inputHash, inputHash);
     assert.deepEqual(receipt.outputHash, outputHash);
+    assert.deepEqual(receipt.parentReceiptHash, EMPTY_HASH);
   });
 
   it("Issues a second receipt with same inputs (different receipt_id)", async () => {
@@ -73,10 +77,11 @@ describe("proof-of-agent", () => {
     );
 
     const tx = await program.methods
-      .issueReceipt(secondReceiptId, modelHash, inputHash, outputHash)
+      .issueReceipt(secondReceiptId, modelHash, inputHash, outputHash, EMPTY_HASH)
       .accounts({
         agent: agent,
         receipt: secondPda,
+        parentReceipt: null,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -161,10 +166,11 @@ describe("proof-of-agent", () => {
     );
 
     await program.methods
-      .issueReceipt(closeReceiptId, modelHash, inputHash, outputHash)
+      .issueReceipt(closeReceiptId, modelHash, inputHash, outputHash, EMPTY_HASH)
       .accounts({
         agent: agent,
         receipt: closePda,
+        parentReceipt: null,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -187,6 +193,145 @@ describe("proof-of-agent", () => {
       assert.fail("Account should be closed");
     } catch (err) {
       console.log("Receipt closed, rent reclaimed successfully");
+    }
+  });
+
+  // ── Task Linking Tests ─────────────────────────────────────────
+
+  it("Issues a child receipt linked to a parent", async () => {
+    // Issue parent receipt
+    const parentId = generateReceiptId();
+    const [parentPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(parentId),
+      ],
+      program.programId
+    );
+
+    await program.methods
+      .issueReceipt(
+        parentId,
+        sha256("data-collector-v1"),
+        sha256(JSON.stringify({ source: "coingecko" })),
+        sha256(JSON.stringify({ prices: { SOL: 185 } })),
+        EMPTY_HASH
+      )
+      .accounts({
+        agent: agent,
+        receipt: parentPda,
+        parentReceipt: null,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const parentReceipt = await program.account.computeReceipt.fetch(parentPda);
+    const parentHash = Array.from(parentReceipt.receiptHash);
+
+    // Issue child receipt linked to parent
+    const childId = generateReceiptId();
+    const [childPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(childId),
+      ],
+      program.programId
+    );
+
+    await program.methods
+      .issueReceipt(
+        childId,
+        sha256("analyser-v2"),
+        sha256(JSON.stringify({ prices: { SOL: 185 } })),
+        sha256(JSON.stringify({ signal: "buy", confidence: 92 })),
+        parentHash
+      )
+      .accounts({
+        agent: agent,
+        receipt: childPda,
+        parentReceipt: parentPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const childReceipt = await program.account.computeReceipt.fetch(childPda);
+    assert.deepEqual(childReceipt.parentReceiptHash, parentHash);
+    assert.ok(childReceipt.isValid);
+    console.log("Child receipt linked to parent successfully");
+  });
+
+  it("Fails to link to an invalidated parent", async () => {
+    // Issue and invalidate a parent
+    const badParentId = generateReceiptId();
+    const [badParentPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(badParentId),
+      ],
+      program.programId
+    );
+
+    await program.methods
+      .issueReceipt(
+        badParentId,
+        sha256("bad-model"),
+        sha256("bad-input"),
+        sha256("bad-output"),
+        EMPTY_HASH
+      )
+      .accounts({
+        agent: agent,
+        receipt: badParentPda,
+        parentReceipt: null,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const badParentReceipt = await program.account.computeReceipt.fetch(badParentPda);
+    const badParentHash = Array.from(badParentReceipt.receiptHash);
+
+    // Invalidate it
+    await program.methods
+      .invalidateReceipt()
+      .accounts({
+        agent: agent,
+        receipt: badParentPda,
+      })
+      .rpc();
+
+    // Try to issue child linked to invalidated parent
+    const childId = generateReceiptId();
+    const [childPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("receipt"),
+        anchor.getProvider().publicKey.toBuffer(),
+        Buffer.from(childId),
+      ],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .issueReceipt(
+          childId,
+          sha256("child-model"),
+          sha256("child-input"),
+          sha256("child-output"),
+          badParentHash
+        )
+        .accounts({
+          agent: agent,
+          receipt: childPda,
+          parentReceipt: badParentPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      assert.fail("Should have thrown");
+    } catch (err) {
+      console.log("Correctly rejected linking to invalidated parent");
     }
   });
 });
