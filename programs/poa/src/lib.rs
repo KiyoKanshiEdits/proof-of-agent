@@ -4,6 +4,8 @@ use anchor_lang::prelude::*;
 
 declare_id!("A8wBefib1QpxPpkV7hrz4tRp49L6gxzDhWBQFcLmBVnv");
 
+pub const EMPTY_HASH: [u8; 32] = [0u8; 32];
+
 #[program]
 pub mod poa {
     use super::*;
@@ -14,7 +16,22 @@ pub mod poa {
         model_hash: [u8; 32],
         input_hash: [u8; 32],
         output_hash: [u8; 32],
+        parent_receipt_hash: [u8; 32],
     ) -> Result<()> {
+        // If a parent is referenced, verify it exists and is valid
+        if parent_receipt_hash != EMPTY_HASH {
+            let parent = &ctx.accounts.parent_receipt;
+            if let Some(parent_account) = parent {
+                require!(parent_account.is_valid, PoaError::InvalidParentReceipt);
+                require!(
+                    parent_account.receipt_hash == parent_receipt_hash,
+                    PoaError::InvalidParentReceipt
+                );
+            } else {
+                return Err(PoaError::InvalidParentReceipt.into());
+            }
+        }
+
         let receipt = &mut ctx.accounts.receipt;
         let agent = ctx.accounts.agent.key();
         let slot = Clock::get()?.slot;
@@ -24,15 +41,17 @@ pub mod poa {
         receipt.model_hash = model_hash;
         receipt.input_hash = input_hash;
         receipt.output_hash = output_hash;
+        receipt.parent_receipt_hash = parent_receipt_hash;
         receipt.slot = slot;
         receipt.is_valid = true;
 
-        let mut data = Vec::with_capacity(152);
+        let mut data = Vec::with_capacity(184);
         data.extend_from_slice(agent.as_ref());
         data.extend_from_slice(&receipt_id);
         data.extend_from_slice(&model_hash);
         data.extend_from_slice(&input_hash);
         data.extend_from_slice(&output_hash);
+        data.extend_from_slice(&parent_receipt_hash);
         data.extend_from_slice(&slot.to_le_bytes());
         receipt.receipt_hash = solana_program::hash::hash(&data).to_bytes();
 
@@ -40,6 +59,7 @@ pub mod poa {
             receipt_hash: receipt.receipt_hash,
             agent,
             model_hash,
+            parent_receipt_hash,
             slot,
         });
 
@@ -50,12 +70,13 @@ pub mod poa {
     pub fn verify_receipt(ctx: Context<VerifyReceipt>) -> Result<bool> {
         let receipt = &ctx.accounts.receipt;
 
-        let mut data = Vec::with_capacity(152);
+        let mut data = Vec::with_capacity(184);
         data.extend_from_slice(receipt.agent.as_ref());
         data.extend_from_slice(&receipt.receipt_id);
         data.extend_from_slice(&receipt.model_hash);
         data.extend_from_slice(&receipt.input_hash);
         data.extend_from_slice(&receipt.output_hash);
+        data.extend_from_slice(&receipt.parent_receipt_hash);
         data.extend_from_slice(&receipt.slot.to_le_bytes());
         let computed_hash = solana_program::hash::hash(&data).to_bytes();
 
@@ -92,13 +113,14 @@ pub struct ComputeReceipt {
     pub model_hash: [u8; 32],
     pub input_hash: [u8; 32],
     pub output_hash: [u8; 32],
+    pub parent_receipt_hash: [u8; 32],
     pub slot: u64,
     pub receipt_hash: [u8; 32],
     pub is_valid: bool,
 }
 
 #[derive(Accounts)]
-#[instruction(receipt_id: [u8; 16], model_hash: [u8; 32], input_hash: [u8; 32], output_hash: [u8; 32])]
+#[instruction(receipt_id: [u8; 16], model_hash: [u8; 32], input_hash: [u8; 32], output_hash: [u8; 32], parent_receipt_hash: [u8; 32])]
 pub struct IssueReceipt<'info> {
     #[account(mut)]
     pub agent: Signer<'info>,
@@ -115,6 +137,9 @@ pub struct IssueReceipt<'info> {
         bump,
     )]
     pub receipt: Account<'info, ComputeReceipt>,
+
+    /// Optional parent receipt for task linking. Pass None if no parent.
+    pub parent_receipt: Option<Account<'info, ComputeReceipt>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -155,6 +180,7 @@ pub struct ReceiptIssued {
     pub receipt_hash: [u8; 32],
     pub agent: Pubkey,
     pub model_hash: [u8; 32],
+    pub parent_receipt_hash: [u8; 32],
     pub slot: u64,
 }
 
@@ -171,4 +197,6 @@ pub enum PoaError {
     UnauthorizedInvalidation,
     #[msg("Receipt has already been invalidated")]
     AlreadyInvalidated,
+    #[msg("Parent receipt is invalid or does not match")]
+    InvalidParentReceipt,
 }
