@@ -1,50 +1,58 @@
 use anchor_lang::prelude::*;
+use light_sdk::{
+    account::LightAccount,
+    address::v1::derive_address,
+    cpi::{CpiAccounts, CpiInputs, CpiSigner},
+    derive_light_cpi_signer,
+    instruction::{account_meta::CompressedAccountMeta, PackedAddressTreeInfo, ValidityProof},
+    LightDiscriminator, LightHasher,
+};
 
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
-
-declare_id!("A8wBefib1QpxPpkV7hrz4tRp49L6gxzDhWBQFcLmBVnv");
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 pub const EMPTY_HASH: [u8; 32] = [0u8; 32];
 
 #[program]
-pub mod poa {
+pub mod poa_compressed {
     use super::*;
 
-    pub fn issue_receipt(
-        ctx: Context<IssueReceipt>,
+    /// Issue a new compressed compute receipt.
+    /// Creates a compressed account storing the receipt data in a Merkle tree.
+    pub fn issue_receipt<'info>(
+        ctx: Context<'_, '_, '_, 'info, GenericAnchorAccounts<'info>>,
+        proof: ValidityProof,
+        address_tree_info: PackedAddressTreeInfo,
+        output_merkle_tree_index: u8,
         receipt_id: [u8; 16],
         model_hash: [u8; 32],
         input_hash: [u8; 32],
         output_hash: [u8; 32],
         parent_receipt_hash: [u8; 32],
     ) -> Result<()> {
-        // If a parent is referenced, verify it exists and is valid
-        if parent_receipt_hash != EMPTY_HASH {
-            let parent = &ctx.accounts.parent_receipt;
-            if let Some(parent_account) = parent {
-                require!(parent_account.is_valid, PoaError::InvalidParentReceipt);
-                require!(
-                    parent_account.receipt_hash == parent_receipt_hash,
-                    PoaError::InvalidParentReceipt
-                );
-            } else {
-                return Err(PoaError::InvalidParentReceipt.into());
-            }
-        }
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
 
-        let receipt = &mut ctx.accounts.receipt;
-        let agent = ctx.accounts.agent.key();
+        // Derive a unique address from receipt_id + signer
+        let (address, address_seed) = derive_address(
+            &[b"receipt", ctx.accounts.signer.key().as_ref(), &receipt_id],
+            &address_tree_info
+                .get_tree_pubkey(&light_cpi_accounts)
+                .map_err(|_| ErrorCode::AccountNotEnoughKeys)?,
+            &crate::ID,
+        );
+
+        let new_address_params = address_tree_info.into_new_address_params_packed(address_seed);
+
+        let agent = ctx.accounts.signer.key();
         let slot = Clock::get()?.slot;
 
-        receipt.agent = agent;
-        receipt.receipt_id = receipt_id;
-        receipt.model_hash = model_hash;
-        receipt.input_hash = input_hash;
-        receipt.output_hash = output_hash;
-        receipt.parent_receipt_hash = parent_receipt_hash;
-        receipt.slot = slot;
-        receipt.is_valid = true;
-
+        // Compute integrity hash
         let mut data = Vec::with_capacity(184);
         data.extend_from_slice(agent.as_ref());
         data.extend_from_slice(&receipt_id);
@@ -53,61 +61,151 @@ pub mod poa {
         data.extend_from_slice(&output_hash);
         data.extend_from_slice(&parent_receipt_hash);
         data.extend_from_slice(&slot.to_le_bytes());
-        receipt.receipt_hash = solana_program::hash::hash(&data).to_bytes();
+        let receipt_hash = solana_program::hash::hash(&data).to_bytes();
 
-        emit!(ReceiptIssued {
-            receipt_hash: receipt.receipt_hash,
-            agent,
-            model_hash,
-            parent_receipt_hash,
-            slot,
-        });
+        let program_id = crate::ID.into();
+        let mut receipt = LightAccount::<'_, ComputeReceipt>::new_init(
+            &program_id,
+            Some(address),
+            output_merkle_tree_index,
+        );
 
-        msg!("PoA: Receipt issued by {} at slot {}", agent, slot);
+        receipt.agent = agent;
+        receipt.receipt_id = receipt_id;
+        receipt.model_hash = model_hash;
+        receipt.input_hash = input_hash;
+        receipt.output_hash = output_hash;
+        receipt.parent_receipt_hash = parent_receipt_hash;
+        receipt.slot = slot;
+        receipt.receipt_hash = receipt_hash;
+        receipt.is_valid = true;
+
+        let cpi = CpiInputs::new_with_address(
+            proof,
+            vec![receipt.to_account_info().map_err(ProgramError::from)?],
+            vec![new_address_params],
+        );
+        cpi.invoke_light_system_program(light_cpi_accounts)
+            .map_err(ProgramError::from)?;
+
+        msg!("PoA: Compressed receipt issued by {} at slot {}", agent, slot);
         Ok(())
     }
 
-    pub fn verify_receipt(ctx: Context<VerifyReceipt>) -> Result<bool> {
-        let receipt = &ctx.accounts.receipt;
+    /// Invalidate a compressed receipt.
+    /// Reads the existing compressed account and writes a new version with is_valid = false.
+    pub fn invalidate_receipt<'info>(
+        ctx: Context<'_, '_, '_, 'info, GenericAnchorAccounts<'info>>,
+        proof: ValidityProof,
+        account_meta: CompressedAccountMeta,
+        // Current receipt data (needed to read the compressed account)
+        receipt_id: [u8; 16],
+        model_hash: [u8; 32],
+        input_hash: [u8; 32],
+        output_hash: [u8; 32],
+        parent_receipt_hash: [u8; 32],
+        slot: u64,
+        receipt_hash: [u8; 32],
+    ) -> Result<()> {
+        let agent = ctx.accounts.signer.key();
 
-        let mut data = Vec::with_capacity(184);
-        data.extend_from_slice(receipt.agent.as_ref());
-        data.extend_from_slice(&receipt.receipt_id);
-        data.extend_from_slice(&receipt.model_hash);
-        data.extend_from_slice(&receipt.input_hash);
-        data.extend_from_slice(&receipt.output_hash);
-        data.extend_from_slice(&receipt.parent_receipt_hash);
-        data.extend_from_slice(&receipt.slot.to_le_bytes());
-        let computed_hash = solana_program::hash::hash(&data).to_bytes();
+        let mut receipt = LightAccount::<'_, ComputeReceipt>::new_mut(
+            &crate::ID,
+            &account_meta,
+            ComputeReceipt {
+                agent,
+                receipt_id,
+                model_hash,
+                input_hash,
+                output_hash,
+                parent_receipt_hash,
+                slot,
+                receipt_hash,
+                is_valid: true,
+            },
+        )
+        .map_err(ProgramError::from)?;
 
-        let valid = receipt.is_valid && computed_hash == receipt.receipt_hash;
-        msg!("PoA: Receipt valid = {}", valid);
-        Ok(valid)
-    }
+        require!(receipt.is_valid, PoaError::AlreadyInvalidated);
 
-    pub fn invalidate_receipt(ctx: Context<InvalidateReceipt>) -> Result<()> {
-        let receipt = &mut ctx.accounts.receipt;
         receipt.is_valid = false;
 
-        emit!(ReceiptInvalidated {
-            receipt_hash: receipt.receipt_hash,
-            agent: receipt.agent,
-            slot: Clock::get()?.slot,
-        });
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
 
-        msg!("PoA: Receipt invalidated by {}", receipt.agent);
+        let cpi = CpiInputs::new(
+            proof,
+            vec![receipt.to_account_info().map_err(ProgramError::from)?],
+        );
+        cpi.invoke_light_system_program(light_cpi_accounts)
+            .map_err(ProgramError::from)?;
+
+        msg!("PoA: Compressed receipt invalidated by {}", agent);
         Ok(())
     }
 
-    pub fn close_receipt(_ctx: Context<CloseReceipt>) -> Result<()> {
-        msg!("PoA: Receipt closed and rent reclaimed");
+    /// Close (delete) a compressed receipt.
+    /// Permanently removes the compressed account from the Merkle tree.
+    pub fn close_receipt<'info>(
+        ctx: Context<'_, '_, '_, 'info, GenericAnchorAccounts<'info>>,
+        proof: ValidityProof,
+        account_meta: CompressedAccountMeta,
+        // Current receipt data
+        receipt_id: [u8; 16],
+        model_hash: [u8; 32],
+        input_hash: [u8; 32],
+        output_hash: [u8; 32],
+        parent_receipt_hash: [u8; 32],
+        slot: u64,
+        receipt_hash: [u8; 32],
+        is_valid: bool,
+    ) -> Result<()> {
+        let agent = ctx.accounts.signer.key();
+
+        let receipt = LightAccount::<'_, ComputeReceipt>::new_close(
+            &crate::ID.into(),
+            &account_meta,
+            ComputeReceipt {
+                agent,
+                receipt_id,
+                model_hash,
+                input_hash,
+                output_hash,
+                parent_receipt_hash,
+                slot,
+                receipt_hash,
+                is_valid,
+            },
+        )
+        .map_err(ProgramError::from)?;
+
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
+
+        let cpi = CpiInputs::new(
+            proof,
+            vec![receipt.to_account_info().map_err(ProgramError::from)?],
+        );
+        cpi.invoke_light_system_program(light_cpi_accounts)
+            .map_err(ProgramError::from)?;
+
+        msg!("PoA: Compressed receipt closed by {}", agent);
         Ok(())
     }
 }
 
-#[account]
-#[derive(InitSpace)]
+/// Compressed compute receipt — stored in a Light Protocol Merkle tree.
+/// No rent required. ~100x cheaper than regular Solana accounts.
+#[event]
+#[derive(Clone, Debug, Default, LightDiscriminator, LightHasher)]
 pub struct ComputeReceipt {
+    #[hash]
     pub agent: Pubkey,
     pub receipt_id: [u8; 16],
     pub model_hash: [u8; 32],
@@ -120,83 +218,13 @@ pub struct ComputeReceipt {
 }
 
 #[derive(Accounts)]
-#[instruction(receipt_id: [u8; 16], model_hash: [u8; 32], input_hash: [u8; 32], output_hash: [u8; 32], parent_receipt_hash: [u8; 32])]
-pub struct IssueReceipt<'info> {
+pub struct GenericAnchorAccounts<'info> {
     #[account(mut)]
-    pub agent: Signer<'info>,
-
-    #[account(
-        init,
-        payer = agent,
-        space = 8 + ComputeReceipt::INIT_SPACE,
-        seeds = [
-            b"receipt",
-            agent.key().as_ref(),
-            receipt_id.as_ref(),
-        ],
-        bump,
-    )]
-    pub receipt: Account<'info, ComputeReceipt>,
-
-    /// Optional parent receipt for task linking. Pass None if no parent.
-    pub parent_receipt: Option<Account<'info, ComputeReceipt>>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct VerifyReceipt<'info> {
-    pub receipt: Account<'info, ComputeReceipt>,
-}
-
-#[derive(Accounts)]
-pub struct InvalidateReceipt<'info> {
-    #[account(mut)]
-    pub agent: Signer<'info>,
-
-    #[account(
-        mut,
-        constraint = receipt.agent == agent.key() @ PoaError::UnauthorizedInvalidation,
-        constraint = receipt.is_valid @ PoaError::AlreadyInvalidated,
-    )]
-    pub receipt: Account<'info, ComputeReceipt>,
-}
-
-#[derive(Accounts)]
-pub struct CloseReceipt<'info> {
-    #[account(mut)]
-    pub agent: Signer<'info>,
-
-    #[account(
-        mut,
-        close = agent,
-        constraint = receipt.agent == agent.key() @ PoaError::UnauthorizedInvalidation,
-    )]
-    pub receipt: Account<'info, ComputeReceipt>,
-}
-
-#[event]
-pub struct ReceiptIssued {
-    pub receipt_hash: [u8; 32],
-    pub agent: Pubkey,
-    pub model_hash: [u8; 32],
-    pub parent_receipt_hash: [u8; 32],
-    pub slot: u64,
-}
-
-#[event]
-pub struct ReceiptInvalidated {
-    pub receipt_hash: [u8; 32],
-    pub agent: Pubkey,
-    pub slot: u64,
+    pub signer: Signer<'info>,
 }
 
 #[error_code]
 pub enum PoaError {
-    #[msg("Only the original agent can invalidate a receipt")]
-    UnauthorizedInvalidation,
     #[msg("Receipt has already been invalidated")]
     AlreadyInvalidated,
-    #[msg("Parent receipt is invalid or does not match")]
-    InvalidParentReceipt,
 }
