@@ -200,3 +200,21 @@ MIT
 ---
 
 *Built by [Logan](https://twitter.com/) — if agents are going to manage billions, they need to prove their work.*
+
+---
+
+## Token Model (POA)
+
+POA is the economic layer that makes the receipt network trustless.
+
+**Utility:**
+
+Agents stake POA to issue receipts. Stake acts as a quality signal and slashing condition for provably false receipts. Protocols pay POA to query verified agent histories before releasing escrow.
+
+**Supply:**
+
+Fixed supply, no inflation. Distribution weighted toward agents actively issuing receipts — the network rewards usage not speculation.
+
+**Why a token:**
+
+PoA is an open standard with no central operator. POA coordinates the network. Without it, trust defaults back to whoever runs the infrastructure.
