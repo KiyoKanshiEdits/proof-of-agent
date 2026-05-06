@@ -139,6 +139,7 @@ proof-of-agent/
 
 ```bash
 # Install the SDK
+# SDK publishing in progress — clone the repo to use locally
 npm install @proof-of-agent/sdk
 
 # In your agent code
@@ -162,7 +163,7 @@ const receipt = await poa.issueReceipt({
 
 ## Roadmap
 
-- [ ] **v0.1** — Receipt schema + Anchor program + TypeScript SDK
+- [x] **v0.1** — Receipt schema + Anchor program + TypeScript SDK
 - [ ] **v0.2** — Light Protocol ZK compression integration
 - [ ] **v0.3** — Virtuals ACP integration example
 - [ ] **v0.4** — Receipt querying API (by agent, by time range, by task)
@@ -198,4 +199,4 @@ MIT
 
 ---
 
-*Built by [Logan Green](https://twitter.com/) — if agents are going to manage billions, they need to prove their work.*
+*Built by [Logan](https://twitter.com/) — if agents are going to manage billions, they need to prove their work.*
